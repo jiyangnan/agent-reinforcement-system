@@ -1,6 +1,6 @@
 # Module 4 — Consistency and Recovery
 
-**Status**: Phase 1 consistency implemented, Phase 2 recovery planned
+**Status**: Phase 1 consistency implemented, Phase 2 recovery implemented (checkpoint + rehydrate v1)
 
 This module hardens the runtime against restart-order failures:
 
@@ -205,24 +205,24 @@ Adds:
 
 ---
 
-## Phase 2 — Planned recovery layer
+## Phase 2 — Recovery layer (implemented v1)
 
 ### Goal
 
 After consistency is restored, recover task state on startup.
 
-### Planned files
+### Files
 
 - `src/checkpoint_store.py`
 - `src/startup_rehydrate.py`
 
-### Planned commands
+### Commands
 
 ```bash
 xng rehydrate
 ```
 
-### Planned checkpoint schema
+### Checkpoint schema
 
 ```json
 {
@@ -237,7 +237,7 @@ xng rehydrate
 }
 ```
 
-### Planned rehydrate snapshot schema
+### Rehydrate snapshot schema
 
 ```json
 {
@@ -266,3 +266,4 @@ xng rehydrate
 1. loop/checkpoint state survives restart
 2. `xng rehydrate` restores current working state
 3. restart recovery depends on checkpoint first, recall second
+4. `xng doctor` reports checkpoint health alongside sync health

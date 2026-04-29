@@ -7,7 +7,7 @@ A production-minded agent runtime toolkit built around three reinforcement layer
 1. **First-Principles Runtime** — forces the agent to reason from axioms instead of habits.
 2. **HA Episodic Memory** — a high-availability local memory stack with automatic failover across Neo4j, SQLite FTS, and raw session/files.
 3. **Autonomous-Loop** — a bounded execution loop that lets the agent keep pushing a goal until it is done, blocked, waiting for human input, or aborted.
-4. **Consistency and Recovery** — a deferred sync layer that keeps SQLite and Neo4j eventually consistent across restart-order failures.
+4. **Consistency and Recovery** — a deferred sync + checkpoint + rehydrate layer that keeps SQLite and Neo4j eventually consistent across restart-order failures and restores working state after reboot.
 
 This repository packages the core runtime pieces so another agent/operator can reproduce the same behavior: stricter reasoning, durable memory, and bounded autonomous execution.
 
@@ -71,6 +71,8 @@ This is what turns the agent from a smart responder into a bounded autonomous wo
 - `schemas/goal_frame.schema.json`
 - `schemas/loop_state.schema.json`
 - `src/autonomous_loop.py`
+- `src/checkpoint_store.py`
+- `src/startup_rehydrate.py`
 - `src/sync_backfill.py`
 - `src/sync_state.py`
 
@@ -93,8 +95,10 @@ agent-reinforcement-system/
 │   └── quickstart.md
 ├── src/
 │   ├── autonomous_loop.py
+│   ├── checkpoint_store.py
 │   ├── episode_ingest.py
 │   ├── neo4j_recall.py
+│   ├── startup_rehydrate.py
 │   ├── sync_backfill.py
 │   ├── sync_state.py
 │   ├── unified_memory_recall.py
@@ -206,6 +210,7 @@ xng loop run examples/goal_frame.example.json
 xng loop step examples/goal_frame.example.json
 xng sync status
 xng sync backfill
+xng rehydrate
 xng doctor
 xng demo
 ```
@@ -247,7 +252,7 @@ xng demo
 
 ### `src/xng.py`
 - unified CLI surface for the whole runtime
-- wraps memory, loop, doctor, and demo flows
+- wraps memory, loop, sync, doctor, rehydrate, and demo flows
 
 ---
 

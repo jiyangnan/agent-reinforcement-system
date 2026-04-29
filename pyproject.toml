@@ -20,7 +20,7 @@ dependencies = [
 xng = "xng:main"
 
 [tool.setuptools]
-py-modules = ["xng", "episode_ingest", "unified_memory_recall", "neo4j_recall", "autonomous_loop", "sync_state", "sync_backfill"]
+py-modules = ["xng", "episode_ingest", "unified_memory_recall", "neo4j_recall", "autonomous_loop", "sync_state", "sync_backfill", "checkpoint_store", "startup_rehydrate"]
 
 [tool.setuptools.package-dir]
 "" = "src"

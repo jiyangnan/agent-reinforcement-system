@@ -24,6 +24,7 @@ from typing import Any
 
 from unified_memory_recall import recall as memory_recall
 from episode_ingest import ingest_event
+from checkpoint_store import save_checkpoint
 
 VALID_STATUSES = {"initialized", "active", "waiting_human", "blocked", "done", "aborted"}
 VALID_STEPS = ["observe", "orient", "decide", "act", "verify", "record"]
@@ -256,14 +257,38 @@ class AutonomousLoop:
     def _touch(self) -> None:
         self.state.updated_at = now_iso()
 
+    def _checkpoint_payload(self) -> dict[str, Any]:
+        return {
+            "goal_id": self.goal.goal_id,
+            "loop_id": self.state.loop_id,
+            "title": self.goal.name,
+            "goal": self.goal.goal,
+            "status": self.state.status,
+            "current_phase": self.state.current_step,
+            "latest_decision": self.state.selected_action,
+            "blockers": self.state.blockers,
+            "open_questions": self.state.open_questions,
+            "next_step": self.state.next_iteration_hint,
+            "next_iteration_hint": self.state.next_iteration_hint,
+            "verification_result": self.state.verification_result,
+            "needs_human_input": self.state.needs_human_input,
+            "last_error": self.state.last_error,
+            "updated_at": self.state.updated_at,
+        }
+
+    def _save_checkpoint(self) -> None:
+        save_checkpoint(self._checkpoint_payload())
+
     def step(self) -> LoopState:
         if self.state.status in {"done", "blocked", "waiting_human", "aborted"}:
+            self._save_checkpoint()
             return self.state
 
         if self.state.iteration >= self.goal.max_iterations:
             self.state.status = "aborted"
             self.state.last_error = "max_iterations_exceeded"
             self._touch()
+            self._save_checkpoint()
             return self.state
 
         self.state.status = "active"
@@ -278,6 +303,7 @@ class AutonomousLoop:
             self.state.needs_human_input = True
             self.state.next_iteration_hint = "await human approval or decision"
             self._touch()
+            self._save_checkpoint()
             return self.state
 
         action_result = self._run_act(decision)
@@ -285,6 +311,7 @@ class AutonomousLoop:
         self._run_record(verification)
         self._resolve_terminal_state(verification)
         self._touch()
+        self._save_checkpoint()
         return self.state
 
     def run(self) -> LoopState:

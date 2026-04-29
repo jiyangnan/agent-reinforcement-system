@@ -62,6 +62,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     }
     import socket, sqlite3
     from sync_state import STATE_DIR, sync_status_report
+    from checkpoint_store import checkpoint_summary
 
     host, port = "localhost", 7687
     try:
@@ -83,6 +84,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         report["checks"]["sqlite"] = "missing"
     report["checks"]["state_dir"] = "ok" if Path(STATE_DIR).exists() else "missing"
     report["memory_health"] = sync_status_report()
+    report["checkpoint_health"] = checkpoint_summary()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
@@ -97,6 +99,10 @@ def cmd_sync(ns: argparse.Namespace) -> int:
         return run_py("sync_backfill.py", args)
     print("unknown sync command", file=sys.stderr)
     return 2
+
+
+def cmd_rehydrate(_: argparse.Namespace) -> int:
+    return run_py("startup_rehydrate.py", [])
 
 
 def cmd_demo(_: argparse.Namespace) -> int:
@@ -115,6 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  xng memory ingest-file /path/to/session.jsonl discord\n"
             "  xng loop run examples/goal_frame.example.json\n"
             "  xng sync status\n"
+            "  xng rehydrate\n"
             "  xng demo"
         ),
         formatter_class=RichHelpFormatter,
@@ -225,11 +232,20 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser(
         "doctor",
         help="check runtime environment and memory consistency health",
-        description="Check environment dependencies plus pending SQLite → Neo4j sync drift.",
+        description="Check environment dependencies plus pending SQLite → Neo4j sync drift and checkpoint state.",
         epilog="Example:\n  xng doctor",
         formatter_class=RichHelpFormatter,
     )
     d.set_defaults(func=cmd_doctor)
+
+    r = sub.add_parser(
+        "rehydrate",
+        help="restore current working state after restart",
+        description="Build a startup recovery snapshot from checkpoints, memory recall, repo state, and sync health.",
+        epilog="Example:\n  xng rehydrate",
+        formatter_class=RichHelpFormatter,
+    )
+    r.set_defaults(func=cmd_rehydrate)
 
     demo = sub.add_parser(
         "demo",
