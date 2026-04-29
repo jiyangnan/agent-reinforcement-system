@@ -2,13 +2,24 @@
 
 > Official command surface: **xiaonangua CLI** (`xng`)
 
-A three-part agent runtime reinforcement project:
+A production-minded agent runtime toolkit built around three reinforcement layers:
 
 1. **First-Principles Runtime** — forces the agent to reason from axioms instead of habits.
 2. **HA Episodic Memory** — a high-availability local memory stack with automatic failover across Neo4j, SQLite FTS, and raw session/files.
 3. **Autonomous-Loop** — a bounded execution loop that lets the agent keep pushing a goal until it is done, blocked, waiting for human input, or aborted.
 
-This repository extracts the first two reinforcement modules from a production OpenClaw assistant setup and packages them so other agents can reproduce the same capabilities.
+This repository packages the core runtime pieces so another agent/operator can reproduce the same behavior: stricter reasoning, durable memory, and bounded autonomous execution.
+
+---
+
+## Why this exists
+
+Most agent demos break in three predictable ways:
+- reasoning becomes hand-wavy
+- memory disappears when one backend fails
+- autonomy loops without a bounded runtime contract
+
+This repo fixes those three failure modes as one system.
 
 ---
 
@@ -26,6 +37,16 @@ Turns “first-principles-only” from a vague prompt idea into a runtime discip
 ### Module 2 — High-Availability Episodic Memory
 Builds a local memory layer that does **not collapse when one backend fails**.
 
+**Recall order**
+1. Neo4j episode graph
+2. SQLite FTS
+3. raw memory/session grep
+
+**Effects**
+- avoids single-provider amnesia
+- enables durable recall of prior sessions, decisions, and upgrades
+- keeps memory usable even when embeddings or graph services fail
+
 ### Module 3 — Autonomous-Loop
 Builds the execution reinforcement layer:
 - Observe
@@ -38,26 +59,16 @@ Builds the execution reinforcement layer:
 
 This is what turns the agent from a smart responder into a bounded autonomous worker.
 
-Integrated runtime behavior:
+**Integrated runtime behavior**
 - **Observe** calls HA memory recall
 - **Orient / Decide** use first-principles reasoning rules
-- **Record** writes loop memory events to a runtime log
+- **Record** writes loop memory events to both the runtime log and the main memory index
 
-Core runtime artifacts:
+**Core runtime artifacts**
 - `docs/module-3-autonomous-loop.md`
 - `schemas/goal_frame.schema.json`
 - `schemas/loop_state.schema.json`
 - `src/autonomous_loop.py`
-
-**Recall order**
-1. Neo4j episode graph
-2. SQLite FTS
-3. raw memory/session grep
-
-**Effects**
-- avoids single-provider amnesia
-- enables durable recall of prior sessions, decisions, and upgrades
-- keeps memory usable even when embeddings or graph services fail
 
 ---
 
@@ -66,7 +77,9 @@ Core runtime artifacts:
 ```text
 agent-reinforcement-system/
 ├── README.md
+├── pyproject.toml
 ├── requirements.txt
+├── xng
 ├── docs/
 │   ├── architecture.md
 │   ├── module-1-first-principles.md
@@ -74,13 +87,18 @@ agent-reinforcement-system/
 │   ├── module-3-autonomous-loop.md
 │   └── quickstart.md
 ├── src/
+│   ├── autonomous_loop.py
 │   ├── episode_ingest.py
+│   ├── neo4j_recall.py
 │   ├── unified_memory_recall.py
-│   └── neo4j_recall.py
+│   └── xng.py
 ├── examples/
 │   ├── first_principles_system_prompt.md
 │   ├── goal_frame.example.json
 │   └── env.example
+├── schemas/
+│   ├── goal_frame.schema.json
+│   └── loop_state.schema.json
 └── docker/
     └── docker-compose.neo4j.yml
 ```
@@ -103,6 +121,10 @@ After install:
 xng doctor
 ```
 
+For local no-install usage:
+```bash
+./xng doctor
+```
 
 ### 1. Start Neo4j
 ```bash
@@ -130,25 +152,26 @@ export ARS_WORKSPACE=$PWD
 
 ### 4. Ingest sessions
 ```bash
-./xng memory ingest-file /path/to/session.jsonl discord
+xng memory ingest-file /path/to/session.jsonl discord
 ```
 
 ### 5. Recall memory
 ```bash
-./xng memory recall "First-Principles-Only"
-./xng memory recall "Hybrid-Vector-Graph neo4j ollama"
+xng memory recall "First-Principles-Only"
+xng memory recall "Hybrid-Vector-Graph neo4j ollama"
 ```
 
 ### 6. Run the autonomous loop demo
 ```bash
-./xng demo
-./xng loop run examples/goal_frame.example.json
+xng demo
+xng loop run examples/goal_frame.example.json
 ```
 
 This demo now exercises the integrated stack:
 - recalls prior memory through `unified_memory_recall.py`
 - uses first-principles-oriented reasoning for action selection
 - writes loop events to `./runtime/loop_memory.jsonl`
+- persists loop events into the main Neo4j + SQLite memory path
 
 ---
 
@@ -174,6 +197,14 @@ xng doctor
 xng demo
 ```
 
+---
+
+## Polish / repo hygiene
+
+- runtime logs are ignored (`runtime/*.jsonl`)
+- packaging artifacts are ignored (`*.egg-info/`)
+- installable entrypoint is defined in `pyproject.toml`
+
 ## Core scripts
 
 ### `src/episode_ingest.py`
@@ -196,8 +227,13 @@ xng demo
 ### `src/autonomous_loop.py`
 - executable bounded autonomy skeleton
 - enforces loop state transitions
+- integrates first-principles reasoning + HA memory recall
 - supports `step` and `run`
 - serializes loop state to JSON
+
+### `src/xng.py`
+- unified CLI surface for the whole runtime
+- wraps memory, loop, doctor, and demo flows
 
 ---
 
