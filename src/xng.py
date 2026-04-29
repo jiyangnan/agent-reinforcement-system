@@ -61,6 +61,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         "checks": {},
     }
     import socket, sqlite3
+    from sync_state import STATE_DIR, sync_status_report
 
     host, port = "localhost", 7687
     try:
@@ -80,8 +81,22 @@ def cmd_doctor(_: argparse.Namespace) -> int:
             report["checks"]["sqlite"] = f"fail: {e}"
     else:
         report["checks"]["sqlite"] = "missing"
+    report["checks"]["state_dir"] = "ok" if Path(STATE_DIR).exists() else "missing"
+    report["memory_health"] = sync_status_report()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
+
+
+def cmd_sync(ns: argparse.Namespace) -> int:
+    if ns.sync_cmd == "status":
+        return run_py("sync_backfill.py", ["status"])
+    if ns.sync_cmd == "backfill":
+        args = ["backfill"]
+        if ns.limit is not None:
+            args.append(str(ns.limit))
+        return run_py("sync_backfill.py", args)
+    print("unknown sync command", file=sys.stderr)
+    return 2
 
 
 def cmd_demo(_: argparse.Namespace) -> int:
@@ -99,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  xng memory recall \"First-Principles-Only\"\n"
             "  xng memory ingest-file /path/to/session.jsonl discord\n"
             "  xng loop run examples/goal_frame.example.json\n"
+            "  xng sync status\n"
             "  xng demo"
         ),
         formatter_class=RichHelpFormatter,
@@ -179,10 +195,37 @@ def build_parser() -> argparse.ArgumentParser:
         lp.add_argument("--out", help="write resulting loop state to this path")
         lp.set_defaults(func=cmd_loop)
 
+    s = sub.add_parser(
+        "sync",
+        help="inspect or reconcile SQLite → Neo4j sync state",
+        description="Sync operations for pending backfill, consistency status, and Neo4j recovery handling.",
+        formatter_class=RichHelpFormatter,
+    )
+    ssub = s.add_subparsers(dest="sync_cmd", required=True, metavar="SYNC_COMMAND")
+
+    ss = ssub.add_parser(
+        "status",
+        help="show pending backfill and drift status",
+        description="Show ledger status, pending backfill count, and whether Neo4j is ready.",
+        epilog="Example:\n  xng sync status",
+        formatter_class=RichHelpFormatter,
+    )
+    ss.set_defaults(func=cmd_sync)
+
+    sb = ssub.add_parser(
+        "backfill",
+        help="replay pending SQLite entries into Neo4j",
+        description="Replay pending sync ledger entries into Neo4j after the graph backend recovers.",
+        epilog="Examples:\n  xng sync backfill\n  xng sync backfill --limit 10",
+        formatter_class=RichHelpFormatter,
+    )
+    sb.add_argument("--limit", type=int, help="maximum number of pending entries to backfill")
+    sb.set_defaults(func=cmd_sync)
+
     d = sub.add_parser(
         "doctor",
-        help="check runtime environment health",
-        description="Check core environment dependencies such as Neo4j port reachability and SQLite presence.",
+        help="check runtime environment and memory consistency health",
+        description="Check environment dependencies plus pending SQLite → Neo4j sync drift.",
         epilog="Example:\n  xng doctor",
         formatter_class=RichHelpFormatter,
     )

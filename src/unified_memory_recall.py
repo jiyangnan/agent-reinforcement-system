@@ -184,20 +184,27 @@ def recall_neo4j(query: str, top_k: int) -> list[Hit]:
     """
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     hits: list[Hit] = []
-    with driver.session() as s:
-        for r in s.run(cypher, **params, limit=top_k):
-            text = (r["full_text"] or "")
-            entities = [x for x in (r["entity_rows"] or []) if x and x.get('name')]
-            score = 2.0 + score_text_match(query, tokens, r["summary"] or "", text, r["topics"] or [], entities) + recency_boost(r["ts"]) + source_adjustment(f"episode:{r['sid']}", r["summary"] or r["sid"])
-            hits.append(Hit(
-                backend="neo4j",
-                score=score,
-                title=r["summary"] or r["sid"],
-                location=f"episode:{r['sid']}",
-                snippet=extract_snippet(text or (r["summary"] or ""), tokens),
-                meta={"topics": r["topics"] or [], "entities": entities, "ts": r["ts"], "channel": r["channel"], "message_count": r["cnt"]},
-            ))
-    driver.close()
+    try:
+        with driver.session() as s:
+            for r in s.run(cypher, **params, limit=top_k):
+                text = (r["full_text"] or "")
+                entities = [x for x in (r["entity_rows"] or []) if x and x.get('name')]
+                score = 2.0 + score_text_match(query, tokens, r["summary"] or "", text, r["topics"] or [], entities) + recency_boost(r["ts"]) + source_adjustment(f"episode:{r['sid']}", r["summary"] or r["sid"])
+                hits.append(Hit(
+                    backend="neo4j",
+                    score=score,
+                    title=r["summary"] or r["sid"],
+                    location=f"episode:{r['sid']}",
+                    snippet=extract_snippet(text or (r["summary"] or ""), tokens),
+                    meta={"topics": r["topics"] or [], "entities": entities, "ts": r["ts"], "channel": r["channel"], "message_count": r["cnt"]},
+                ))
+    except Exception:
+        return []
+    finally:
+        try:
+            driver.close()
+        except Exception:
+            pass
     return hits
 
 

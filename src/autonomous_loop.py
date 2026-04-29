@@ -99,7 +99,14 @@ class HAMemoryAdapter:
         session_id = f"loop:{item['loop_id']}:{item['iteration']}"
         summary = f"Loop {item['goal_id']} iteration {item['iteration']}"
         full_text = json.dumps(item, ensure_ascii=False)
-        ingest = ingest_event(session_id=session_id, summary=summary, full_text=full_text, channel=self.channel)
+        ingest = ingest_event(
+            session_id=session_id,
+            summary=summary,
+            full_text=full_text,
+            channel=self.channel,
+            kind="loop_record",
+            event_id=f"loop:{item['loop_id']}:{item['iteration']}",
+        )
         return ingest
 
 

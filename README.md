@@ -7,6 +7,7 @@ A production-minded agent runtime toolkit built around three reinforcement layer
 1. **First-Principles Runtime** — forces the agent to reason from axioms instead of habits.
 2. **HA Episodic Memory** — a high-availability local memory stack with automatic failover across Neo4j, SQLite FTS, and raw session/files.
 3. **Autonomous-Loop** — a bounded execution loop that lets the agent keep pushing a goal until it is done, blocked, waiting for human input, or aborted.
+4. **Consistency and Recovery** — a deferred sync layer that keeps SQLite and Neo4j eventually consistent across restart-order failures.
 
 This repository packages the core runtime pieces so another agent/operator can reproduce the same behavior: stricter reasoning, durable memory, and bounded autonomous execution.
 
@@ -66,9 +67,12 @@ This is what turns the agent from a smart responder into a bounded autonomous wo
 
 **Core runtime artifacts**
 - `docs/module-3-autonomous-loop.md`
+- `docs/module-4-consistency-and-recovery.md`
 - `schemas/goal_frame.schema.json`
 - `schemas/loop_state.schema.json`
 - `src/autonomous_loop.py`
+- `src/sync_backfill.py`
+- `src/sync_state.py`
 
 ---
 
@@ -85,11 +89,14 @@ agent-reinforcement-system/
 │   ├── module-1-first-principles.md
 │   ├── module-2-ha-episodic-memory.md
 │   ├── module-3-autonomous-loop.md
+│   ├── module-4-consistency-and-recovery.md
 │   └── quickstart.md
 ├── src/
 │   ├── autonomous_loop.py
 │   ├── episode_ingest.py
 │   ├── neo4j_recall.py
+│   ├── sync_backfill.py
+│   ├── sync_state.py
 │   ├── unified_memory_recall.py
 │   └── xng.py
 ├── examples/
@@ -197,6 +204,8 @@ xng memory ingest-file path/to/session.jsonl
 xng memory ingest-session <session-id>
 xng loop run examples/goal_frame.example.json
 xng loop step examples/goal_frame.example.json
+xng sync status
+xng sync backfill
 xng doctor
 xng demo
 ```
@@ -206,6 +215,7 @@ xng demo
 ## Polish / repo hygiene
 
 - runtime logs are ignored (`runtime/*.jsonl`)
+- state ledgers/checkpoints are ignored (`state/*.jsonl`, `state/checkpoints/`)
 - packaging artifacts are ignored (`*.egg-info/`)
 - installable entrypoint is defined in `pyproject.toml`
 

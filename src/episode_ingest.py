@@ -10,12 +10,17 @@ Designed for three trigger modes:
 import sys, json, os, re, sqlite3, hashlib, time
 from datetime import datetime, timezone
 
+from sync_state import append_ledger_event
+
 NEO4J_URI = os.getenv("ARS_NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("ARS_NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("ARS_NEO4J_PASSWORD", "password")
 
 SESSION_BASE = os.getenv("ARS_SESSION_BASE", os.path.expanduser("~/.openclaw/agents"))
 MEMORY_DB = os.getenv("ARS_MEMORY_DB", os.path.expanduser("~/.openclaw/memory/main.sqlite"))
+LEDGER_KIND_SESSION = "session"
+LEDGER_KIND_EVENT = "event"
+LEDGER_KIND_LOOP_RECORD = "loop_record"
 
 END_PHRASES = ["就这样", "先这样", "好了", "没了", "谢谢", "行", "好", "OK", "ok", "好的", "知道了", "明白了", "拜拜", "再见"]
 SKIP_MARKERS = ["HEARTBEAT_OK", "NO_REPLY", "System (untrusted)", "Exec completed", "Cron job", "queued messages"]
@@ -348,7 +353,27 @@ def extract_meta(messages):
     }
 
 
-def ingest_event(session_id, summary, full_text, channel="runtime", first_ts=None, last_ts=None, msg_count=1):
+def _record_sync_ledger(event_id, session_id, channel, kind, summary, topics, entities, first_ts, last_ts, msg_count, sqlite_ok, neo4j_ok, last_error=None):
+    return append_ledger_event({
+        "event_id": event_id,
+        "session_id": session_id,
+        "channel": channel,
+        "kind": kind,
+        "summary": summary,
+        "topics": topics,
+        "entities": entities,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "msg_count": msg_count,
+        "sqlite_ok": bool(sqlite_ok),
+        "neo4j_ok": bool(neo4j_ok),
+        "needs_backfill": bool(sqlite_ok and not neo4j_ok),
+        "retry_count": 0,
+        "last_error": last_error,
+    })
+
+
+def ingest_event(session_id, summary, full_text, channel="runtime", first_ts=None, last_ts=None, msg_count=1, kind=LEDGER_KIND_EVENT, event_id=None):
     """Ingest a synthetic event/memory item into both SQLite and Neo4j."""
     first_ts = first_ts or datetime.now(timezone.utc).isoformat()
     last_ts = last_ts or first_ts
@@ -362,6 +387,21 @@ def ingest_event(session_id, summary, full_text, channel="runtime", first_ts=Non
     entities = extract_entities([{"role": "assistant", "text": cleaned_full_text, "timestamp": first_ts}], cleaned_full_text)
     sqlite_ok = sqlite_write(session_id, cleaned_summary, cleaned_full_text, channel, topics, first_ts, last_ts, msg_count)
     neo4j_ok = neo4j_write(session_id, cleaned_summary, cleaned_full_text, channel, topics, entities, first_ts, last_ts, msg_count)
+    ledger = _record_sync_ledger(
+        event_id=event_id or f"episode:{session_id}",
+        session_id=session_id,
+        channel=channel,
+        kind=kind,
+        summary=cleaned_summary,
+        topics=topics,
+        entities=entities,
+        first_ts=first_ts,
+        last_ts=last_ts,
+        msg_count=msg_count,
+        sqlite_ok=sqlite_ok,
+        neo4j_ok=neo4j_ok,
+        last_error=None if neo4j_ok else "neo4j_write_failed",
+    )
     return {
         "summary": cleaned_summary,
         "topics": topics,
@@ -372,6 +412,7 @@ def ingest_event(session_id, summary, full_text, channel="runtime", first_ts=Non
         "full_text": cleaned_full_text,
         "sqlite_ok": sqlite_ok,
         "neo4j_ok": neo4j_ok,
+        "ledger": ledger,
     }
 
 
@@ -387,7 +428,22 @@ def ingest_session(session_id, fpath, channel="discord"):
                              meta["topics"], meta["first_ts"], meta["last_ts"], meta["msg_count"])
     neo4j_ok = neo4j_write(session_id, meta["summary"], meta["full_text"], channel,
                            meta["topics"], meta["entities"], meta["first_ts"], meta["last_ts"], meta["msg_count"])
-    return {"ended_by": ended, "sqlite_ok": sqlite_ok, "neo4j_ok": neo4j_ok, **meta}
+    ledger = _record_sync_ledger(
+        event_id=f"episode:{session_id}",
+        session_id=session_id,
+        channel=channel,
+        kind=LEDGER_KIND_SESSION,
+        summary=meta["summary"],
+        topics=meta["topics"],
+        entities=meta["entities"],
+        first_ts=meta["first_ts"],
+        last_ts=meta["last_ts"],
+        msg_count=meta["msg_count"],
+        sqlite_ok=sqlite_ok,
+        neo4j_ok=neo4j_ok,
+        last_error=None if neo4j_ok else "neo4j_write_failed",
+    )
+    return {"ended_by": ended, "sqlite_ok": sqlite_ok, "neo4j_ok": neo4j_ok, "ledger": ledger, **meta}
 
 
 # ────────────────────────────────────────────────────────────────────────────
