@@ -1,5 +1,7 @@
 # agent-reinforcement-system
 
+> Official command surface: **xiaonangua CLI** (`xng`)
+
 A three-part agent runtime reinforcement project:
 
 1. **First-Principles Runtime** — forces the agent to reason from axioms instead of habits.
@@ -87,6 +89,11 @@ agent-reinforcement-system/
 
 ## Quick start
 
+### CLI identity
+- Product name: **xiaonangua CLI**
+- Command: **`xng`**
+
+
 ### 1. Start Neo4j
 ```bash
 cd docker
@@ -113,18 +120,19 @@ export ARS_WORKSPACE=$PWD
 
 ### 4. Ingest sessions
 ```bash
-python3 src/episode_ingest.py ingest-file /path/to/session.jsonl discord
+./xng memory ingest-file /path/to/session.jsonl discord
 ```
 
 ### 5. Recall memory
 ```bash
-python3 src/unified_memory_recall.py "First-Principles-Only"
-python3 src/unified_memory_recall.py "Hybrid-Vector-Graph neo4j ollama"
+./xng memory recall "First-Principles-Only"
+./xng memory recall "Hybrid-Vector-Graph neo4j ollama"
 ```
 
 ### 6. Run the autonomous loop demo
 ```bash
-python3 src/autonomous_loop.py examples/goal_frame.example.json --mode run
+./xng demo
+./xng loop run examples/goal_frame.example.json
 ```
 
 This demo now exercises the integrated stack:
@@ -143,6 +151,18 @@ If SQLite fails, raw file recall still works.
 If embeddings fail, keyword + graph recall still works.
 
 ---
+
+## CLI commands
+
+```bash
+xng memory recall "query"
+xng memory ingest-file path/to/session.jsonl
+xng memory ingest-session <session-id>
+xng loop run examples/goal_frame.example.json
+xng loop step examples/goal_frame.example.json
+xng doctor
+xng demo
+```
 
 ## Core scripts
 
