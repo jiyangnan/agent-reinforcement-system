@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 
 
+class RichHelpFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
+    pass
+
+
 def run_py(script: str, args: list[str]) -> int:
     cmd = [sys.executable, str(SRC / script), *args]
     return subprocess.call(cmd, cwd=ROOT)
@@ -57,6 +61,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         "checks": {},
     }
     import socket, sqlite3
+
     host, port = "localhost", 7687
     try:
         with socket.create_connection((host, port), timeout=2):
@@ -85,44 +90,111 @@ def cmd_demo(_: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="xng", description="xiaonangua CLI")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(
+        prog="xng",
+        description="xiaonangua CLI — first-principles reasoning, HA memory, and bounded autonomy.",
+        epilog=(
+            "Examples:\n"
+            "  xng doctor\n"
+            "  xng memory recall \"First-Principles-Only\"\n"
+            "  xng memory ingest-file /path/to/session.jsonl discord\n"
+            "  xng loop run examples/goal_frame.example.json\n"
+            "  xng demo"
+        ),
+        formatter_class=RichHelpFormatter,
+    )
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
-    m = sub.add_parser("memory", help="memory operations")
-    msub = m.add_subparsers(dest="memory_cmd", required=True)
+    m = sub.add_parser(
+        "memory",
+        help="recall or ingest memory",
+        description="Memory operations: recall indexed memory or ingest new session/runtime material.",
+        formatter_class=RichHelpFormatter,
+    )
+    msub = m.add_subparsers(dest="memory_cmd", required=True, metavar="MEMORY_COMMAND")
 
-    mr = msub.add_parser("recall", help="recall memory")
-    mr.add_argument("query")
-    mr.add_argument("--top-k", type=int, default=8)
-    mr.add_argument("--json", action="store_true")
-    mr.add_argument("--no-neo4j", action="store_true")
-    mr.add_argument("--no-sqlite", action="store_true")
-    mr.add_argument("--no-files", action="store_true")
+    mr = msub.add_parser(
+        "recall",
+        help="search memory across Neo4j / SQLite / files",
+        description="Recall memory with automatic backend failover and merged ranking.",
+        epilog=(
+            "Examples:\n"
+            "  xng memory recall \"First-Principles-Only\"\n"
+            "  xng memory recall \"ars-demo-001\" --top-k 5\n"
+            "  xng memory recall \"neo4j memory\" --json --no-files"
+        ),
+        formatter_class=RichHelpFormatter,
+    )
+    mr.add_argument("query", help="query text to search for")
+    mr.add_argument("--top-k", type=int, default=8, help="maximum number of hits to return")
+    mr.add_argument("--json", action="store_true", help="emit JSON output when supported")
+    mr.add_argument("--no-neo4j", action="store_true", help="skip Neo4j recall")
+    mr.add_argument("--no-sqlite", action="store_true", help="skip SQLite FTS recall")
+    mr.add_argument("--no-files", action="store_true", help="skip raw file/session grep fallback")
     mr.set_defaults(func=cmd_memory)
 
-    mif = msub.add_parser("ingest-file", help="ingest a transcript file")
-    mif.add_argument("path")
-    mif.add_argument("channel", nargs="?", default="discord")
+    mif = msub.add_parser(
+        "ingest-file",
+        help="ingest a transcript file into the memory index",
+        description="Ingest a session transcript JSONL file into SQLite and Neo4j memory backends.",
+        epilog="Example:\n  xng memory ingest-file /path/to/session.jsonl discord",
+        formatter_class=RichHelpFormatter,
+    )
+    mif.add_argument("path", help="path to a session transcript file")
+    mif.add_argument("channel", nargs="?", default="discord", help="source channel label")
     mif.set_defaults(func=cmd_memory)
 
-    mis = msub.add_parser("ingest-session", help="ingest a session by id")
-    mis.add_argument("session_id")
-    mis.add_argument("channel", nargs="?", default="discord")
+    mis = msub.add_parser(
+        "ingest-session",
+        help="ingest a visible session by id",
+        description="Ingest a session by session id using the configured session base directory.",
+        epilog="Example:\n  xng memory ingest-session 26e731ba-64b2-4f40-b34f-f58ab8a03987 discord",
+        formatter_class=RichHelpFormatter,
+    )
+    mis.add_argument("session_id", help="session id to ingest")
+    mis.add_argument("channel", nargs="?", default="discord", help="source channel label")
     mis.set_defaults(func=cmd_memory)
 
-    l = sub.add_parser("loop", help="autonomous loop")
-    lsub = l.add_subparsers(dest="loop_cmd", required=True)
+    l = sub.add_parser(
+        "loop",
+        help="run the bounded autonomous loop",
+        description="Autonomous-Loop operations for goal execution.",
+        formatter_class=RichHelpFormatter,
+    )
+    lsub = l.add_subparsers(dest="loop_cmd", required=True, metavar="LOOP_COMMAND")
     for mode in ("run", "step"):
-        lp = lsub.add_parser(mode, help=f"{mode} autonomous loop")
-        lp.add_argument("goal")
-        lp.add_argument("--state")
-        lp.add_argument("--out")
+        lp = lsub.add_parser(
+            mode,
+            help=f"{mode} a goal frame through the loop",
+            description=f"{mode.capitalize()} an autonomous loop from a goal frame JSON file.",
+            epilog=(
+                f"Examples:\n"
+                f"  xng loop {mode} examples/goal_frame.example.json\n"
+                f"  xng loop {mode} examples/goal_frame.example.json --out loop_state.json"
+            ),
+            formatter_class=RichHelpFormatter,
+        )
+        lp.add_argument("goal", help="path to goal frame JSON")
+        lp.add_argument("--state", help="path to an existing loop state JSON")
+        lp.add_argument("--out", help="write resulting loop state to this path")
         lp.set_defaults(func=cmd_loop)
 
-    d = sub.add_parser("doctor", help="environment checks")
+    d = sub.add_parser(
+        "doctor",
+        help="check runtime environment health",
+        description="Check core environment dependencies such as Neo4j port reachability and SQLite presence.",
+        epilog="Example:\n  xng doctor",
+        formatter_class=RichHelpFormatter,
+    )
     d.set_defaults(func=cmd_doctor)
 
-    demo = sub.add_parser("demo", help="run demo goal")
+    demo = sub.add_parser(
+        "demo",
+        help="run the bundled integrated demo",
+        description="Run the bundled goal frame demo that exercises memory recall and the autonomy loop.",
+        epilog="Example:\n  xng demo",
+        formatter_class=RichHelpFormatter,
+    )
     demo.set_defaults(func=cmd_demo)
     return p
 

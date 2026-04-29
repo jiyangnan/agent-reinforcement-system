@@ -188,6 +188,10 @@ If embeddings fail, keyword + graph recall still works.
 ## CLI commands
 
 ```bash
+xng --help
+xng memory --help
+xng loop --help
+
 xng memory recall "query"
 xng memory ingest-file path/to/session.jsonl
 xng memory ingest-session <session-id>
