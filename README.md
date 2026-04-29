@@ -1,9 +1,10 @@
 # agent-reinforcement-system
 
-A two-part agent runtime reinforcement project:
+A three-part agent runtime reinforcement project:
 
 1. **First-Principles Runtime** — forces the agent to reason from axioms instead of habits.
 2. **HA Episodic Memory** — a high-availability local memory stack with automatic failover across Neo4j, SQLite FTS, and raw session/files.
+3. **Autonomous-Loop** — a bounded execution loop that lets the agent keep pushing a goal until it is done, blocked, waiting for human input, or aborted.
 
 This repository extracts the first two reinforcement modules from a production OpenClaw assistant setup and packages them so other agents can reproduce the same capabilities.
 
@@ -22,6 +23,24 @@ Turns “first-principles-only” from a vague prompt idea into a runtime discip
 
 ### Module 2 — High-Availability Episodic Memory
 Builds a local memory layer that does **not collapse when one backend fails**.
+
+### Module 3 — Autonomous-Loop
+Builds the execution reinforcement layer:
+- Observe
+- Orient
+- Decide
+- Act
+- Verify
+- Record
+- Loop / Exit
+
+This is what turns the agent from a smart responder into a bounded autonomous worker.
+
+Core runtime artifacts:
+- `docs/module-3-autonomous-loop.md`
+- `schemas/goal_frame.schema.json`
+- `schemas/loop_state.schema.json`
+- `src/autonomous_loop.py`
 
 **Recall order**
 1. Neo4j episode graph
@@ -45,6 +64,7 @@ agent-reinforcement-system/
 │   ├── architecture.md
 │   ├── module-1-first-principles.md
 │   ├── module-2-ha-episodic-memory.md
+│   ├── module-3-autonomous-loop.md
 │   └── quickstart.md
 ├── src/
 │   ├── episode_ingest.py
@@ -52,6 +72,7 @@ agent-reinforcement-system/
 │   └── neo4j_recall.py
 ├── examples/
 │   ├── first_principles_system_prompt.md
+│   ├── goal_frame.example.json
 │   └── env.example
 └── docker/
     └── docker-compose.neo4j.yml
@@ -96,6 +117,11 @@ python3 src/unified_memory_recall.py "First-Principles-Only"
 python3 src/unified_memory_recall.py "Hybrid-Vector-Graph neo4j ollama"
 ```
 
+### 6. Run the autonomous loop demo
+```bash
+python3 src/autonomous_loop.py examples/goal_frame.example.json --mode run
+```
+
 ---
 
 ## Key design principle
@@ -127,13 +153,20 @@ If embeddings fail, keyword + graph recall still works.
 - lightweight Neo4j-only recall script
 - useful for debugging the graph layer directly
 
+### `src/autonomous_loop.py`
+- executable bounded autonomy skeleton
+- enforces loop state transitions
+- supports `step` and `run`
+- serializes loop state to JSON
+
 ---
 
 ## Reproducibility goal
 
-This repo is meant to let another operator reproduce the same two reinforcement capabilities used in the original assistant:
+This repo is meant to let another operator reproduce the same reinforcement capabilities used in the original assistant:
 - a first-principles reasoning discipline
 - a robust local episodic memory system
+- a bounded autonomous execution loop
 
 ---
 

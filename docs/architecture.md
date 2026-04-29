@@ -1,6 +1,6 @@
 # Architecture
 
-## Two-module reinforcement system
+## Three-module reinforcement system
 
 ### Module 1 — First-Principles Runtime
 A reasoning reinforcement layer.
@@ -8,9 +8,13 @@ A reasoning reinforcement layer.
 ### Module 2 — High-Availability Episodic Memory
 A memory reinforcement layer.
 
-These two modules work together:
+### Module 3 — Autonomous-Loop
+An execution reinforcement layer.
+
+These three modules work together:
 - module 1 improves decision quality
 - module 2 preserves context and prior decisions
+- module 3 keeps the agent moving toward completion
 
 ---
 
