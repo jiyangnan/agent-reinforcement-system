@@ -105,6 +105,10 @@ def cmd_rehydrate(ns: argparse.Namespace) -> int:
     args = ["--format", ns.format]
     if ns.out:
         args += ["--out", ns.out]
+    if ns.write_default:
+        args.append("--write-default")
+    if ns.print_path:
+        args.append("--print-path")
     return run_py("startup_rehydrate.py", args)
 
 
@@ -112,6 +116,11 @@ def cmd_bootstrap(ns: argparse.Namespace) -> int:
     args = ["--format", "bootstrap"]
     if ns.out:
         args += ["--out", ns.out]
+    elif not ns.stdout:
+        args.append("--write-default")
+        args.append("--print-path")
+    if ns.stdout:
+        pass
     return run_py("startup_rehydrate.py", args)
 
 
@@ -131,8 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  xng memory ingest-file /path/to/session.jsonl discord\n"
             "  xng loop run examples/goal_frame.example.json\n"
             "  xng sync status\n"
-            "  xng rehydrate\n"
-            "  xng bootstrap --out /tmp/startup-context.txt\n"
+            "  xng rehydrate --write-default --print-path\n"
+            "  xng bootstrap\n"
             "  xng demo"
         ),
         formatter_class=RichHelpFormatter,
@@ -253,21 +262,24 @@ def build_parser() -> argparse.ArgumentParser:
         "rehydrate",
         help="restore current working state after restart",
         description="Build a startup recovery snapshot from checkpoints, memory recall, repo state, and sync health.",
-        epilog="Examples:\n  xng rehydrate\n  xng rehydrate --format bootstrap\n  xng rehydrate --out /tmp/rehydrate.json",
+        epilog="Examples:\n  xng rehydrate\n  xng rehydrate --format bootstrap\n  xng rehydrate --write-default --print-path",
         formatter_class=RichHelpFormatter,
     )
     r.add_argument("--format", choices=["json", "bootstrap"], default="json", help="output format")
     r.add_argument("--out", help="write output to a file")
+    r.add_argument("--write-default", action="store_true", help="write to the standard recovery path under state/")
+    r.add_argument("--print-path", action="store_true", help="print the resolved output path after writing")
     r.set_defaults(func=cmd_rehydrate)
 
     b = sub.add_parser(
         "bootstrap",
         help="emit startup-ready text context for a new session",
         description="Render a concise startup context block suitable for injecting into a new session bootstrap flow.",
-        epilog="Examples:\n  xng bootstrap\n  xng bootstrap --out /tmp/startup-context.txt",
+        epilog="Examples:\n  xng bootstrap\n  xng bootstrap --stdout\n  xng bootstrap --out /tmp/startup-context.txt",
         formatter_class=RichHelpFormatter,
     )
     b.add_argument("--out", help="write bootstrap text to a file")
+    b.add_argument("--stdout", action="store_true", help="print bootstrap text instead of writing the standard startup file")
     b.set_defaults(func=cmd_bootstrap)
 
     demo = sub.add_parser(

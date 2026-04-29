@@ -181,9 +181,14 @@ xng loop run examples/goal_frame.example.json
 ### 7. Generate startup recovery context
 ```bash
 xng rehydrate
-xng rehydrate --format bootstrap
-xng bootstrap --out /tmp/startup-context.txt
+xng rehydrate --write-default --print-path
+xng bootstrap
+xng bootstrap --stdout
 ```
+
+Standard startup recovery paths:
+- JSON snapshot → `state/rehydrate-snapshot.json`
+- bootstrap text → `state/startup-context.txt`
 
 This demo now exercises the integrated stack:
 - recalls prior memory through `unified_memory_recall.py`

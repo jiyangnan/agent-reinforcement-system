@@ -269,14 +269,16 @@ Two startup-friendly outputs now exist:
 1. **JSON snapshot** for programmatic orchestration
    ```bash
    xng rehydrate
-   xng rehydrate --out /tmp/rehydrate.json
+   xng rehydrate --write-default --print-path
    ```
+   Standard file: `state/rehydrate-snapshot.json`
 
 2. **Bootstrap text** for direct session-context injection
    ```bash
-   xng rehydrate --format bootstrap
-   xng bootstrap --out /tmp/startup-context.txt
+   xng bootstrap
+   xng bootstrap --stdout
    ```
+   Standard file: `state/startup-context.txt`
 
 Recommended startup flow:
 
@@ -284,7 +286,8 @@ Recommended startup flow:
 process starts
 -> xng sync status
 -> if pending_backfill > 0 and Neo4j is ready: xng sync backfill
--> xng bootstrap --out <startup-context-file>
+-> xng bootstrap
+-> read state/startup-context.txt
 -> inject that bootstrap text into the new session startup context
 ```
 

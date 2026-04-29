@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from checkpoint_store import list_checkpoints, list_open_checkpoints
-from sync_state import sync_status_report
+from sync_state import STATE_DIR, sync_status_report
 from unified_memory_recall import recall
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_REHYDRATE_PATH = Path(STATE_DIR) / "rehydrate-snapshot.json"
+DEFAULT_BOOTSTRAP_PATH = Path(STATE_DIR) / "startup-context.txt"
 
 
 def collect_recent_repo_changes(limit: int = 5) -> list[dict[str, Any]]:
@@ -156,16 +158,32 @@ def render_bootstrap_text(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def default_output_path(fmt: str) -> Path:
+    return DEFAULT_REHYDRATE_PATH if fmt == "json" else DEFAULT_BOOTSTRAP_PATH
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build a startup recovery snapshot")
     ap.add_argument("--format", choices=["json", "bootstrap"], default="json")
     ap.add_argument("--out", help="write output to a file instead of stdout")
+    ap.add_argument("--write-default", action="store_true", help="write to the standard startup recovery path for this format")
+    ap.add_argument("--print-path", action="store_true", help="print the resolved output path after writing")
     args = ap.parse_args()
 
     snapshot = build_rehydrate_snapshot()
     rendered = json.dumps(snapshot, ensure_ascii=False, indent=2) if args.format == "json" else render_bootstrap_text(snapshot)
+
+    out_path = None
     if args.out:
-        Path(args.out).write_text(rendered + ("" if rendered.endswith("\n") else "\n"), encoding="utf-8")
+        out_path = Path(args.out)
+    elif args.write_default:
+        out_path = default_output_path(args.format)
+
+    if out_path:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered + ("" if rendered.endswith("\n") else "\n"), encoding="utf-8")
+        if args.print_path:
+            print(str(out_path))
     else:
         print(rendered)
     return 0
