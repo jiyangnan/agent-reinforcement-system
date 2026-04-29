@@ -178,6 +178,13 @@ xng demo
 xng loop run examples/goal_frame.example.json
 ```
 
+### 7. Generate startup recovery context
+```bash
+xng rehydrate
+xng rehydrate --format bootstrap
+xng bootstrap --out /tmp/startup-context.txt
+```
+
 This demo now exercises the integrated stack:
 - recalls prior memory through `unified_memory_recall.py`
 - uses first-principles-oriented reasoning for action selection
@@ -211,6 +218,7 @@ xng loop step examples/goal_frame.example.json
 xng sync status
 xng sync backfill
 xng rehydrate
+xng bootstrap
 xng doctor
 xng demo
 ```
@@ -252,7 +260,7 @@ xng demo
 
 ### `src/xng.py`
 - unified CLI surface for the whole runtime
-- wraps memory, loop, sync, doctor, rehydrate, and demo flows
+- wraps memory, loop, sync, doctor, rehydrate, bootstrap, and demo flows
 
 ---
 

@@ -101,8 +101,18 @@ def cmd_sync(ns: argparse.Namespace) -> int:
     return 2
 
 
-def cmd_rehydrate(_: argparse.Namespace) -> int:
-    return run_py("startup_rehydrate.py", [])
+def cmd_rehydrate(ns: argparse.Namespace) -> int:
+    args = ["--format", ns.format]
+    if ns.out:
+        args += ["--out", ns.out]
+    return run_py("startup_rehydrate.py", args)
+
+
+def cmd_bootstrap(ns: argparse.Namespace) -> int:
+    args = ["--format", "bootstrap"]
+    if ns.out:
+        args += ["--out", ns.out]
+    return run_py("startup_rehydrate.py", args)
 
 
 def cmd_demo(_: argparse.Namespace) -> int:
@@ -122,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  xng loop run examples/goal_frame.example.json\n"
             "  xng sync status\n"
             "  xng rehydrate\n"
+            "  xng bootstrap --out /tmp/startup-context.txt\n"
             "  xng demo"
         ),
         formatter_class=RichHelpFormatter,
@@ -242,10 +253,22 @@ def build_parser() -> argparse.ArgumentParser:
         "rehydrate",
         help="restore current working state after restart",
         description="Build a startup recovery snapshot from checkpoints, memory recall, repo state, and sync health.",
-        epilog="Example:\n  xng rehydrate",
+        epilog="Examples:\n  xng rehydrate\n  xng rehydrate --format bootstrap\n  xng rehydrate --out /tmp/rehydrate.json",
         formatter_class=RichHelpFormatter,
     )
+    r.add_argument("--format", choices=["json", "bootstrap"], default="json", help="output format")
+    r.add_argument("--out", help="write output to a file")
     r.set_defaults(func=cmd_rehydrate)
+
+    b = sub.add_parser(
+        "bootstrap",
+        help="emit startup-ready text context for a new session",
+        description="Render a concise startup context block suitable for injecting into a new session bootstrap flow.",
+        epilog="Examples:\n  xng bootstrap\n  xng bootstrap --out /tmp/startup-context.txt",
+        formatter_class=RichHelpFormatter,
+    )
+    b.add_argument("--out", help="write bootstrap text to a file")
+    b.set_defaults(func=cmd_bootstrap)
 
     demo = sub.add_parser(
         "demo",

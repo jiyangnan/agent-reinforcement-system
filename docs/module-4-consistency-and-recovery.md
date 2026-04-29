@@ -220,6 +220,7 @@ After consistency is restored, recover task state on startup.
 
 ```bash
 xng rehydrate
+xng bootstrap
 ```
 
 ### Checkpoint schema
@@ -261,9 +262,36 @@ xng rehydrate
 4. `xng sync backfill` replays pending entries after Neo4j recovery
 5. replayed entries become recallable through Neo4j-backed recall
 
+### Startup integration path
+
+Two startup-friendly outputs now exist:
+
+1. **JSON snapshot** for programmatic orchestration
+   ```bash
+   xng rehydrate
+   xng rehydrate --out /tmp/rehydrate.json
+   ```
+
+2. **Bootstrap text** for direct session-context injection
+   ```bash
+   xng rehydrate --format bootstrap
+   xng bootstrap --out /tmp/startup-context.txt
+   ```
+
+Recommended startup flow:
+
+```text
+process starts
+-> xng sync status
+-> if pending_backfill > 0 and Neo4j is ready: xng sync backfill
+-> xng bootstrap --out <startup-context-file>
+-> inject that bootstrap text into the new session startup context
+```
+
 ### Phase 2
 
 1. loop/checkpoint state survives restart
 2. `xng rehydrate` restores current working state
-3. restart recovery depends on checkpoint first, recall second
-4. `xng doctor` reports checkpoint health alongside sync health
+3. startup bootstrap text can be generated for session injection
+4. restart recovery depends on checkpoint first, recall second
+5. `xng doctor` reports checkpoint health alongside sync health

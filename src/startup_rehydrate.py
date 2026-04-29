@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -116,9 +117,57 @@ def build_rehydrate_snapshot() -> dict[str, Any]:
     }
 
 
+def render_bootstrap_text(snapshot: dict[str, Any]) -> str:
+    lines = ["Startup Rehydrate Snapshot", ""]
+    sync = snapshot.get("sync_health", {})
+    if sync.get("backfill_needed"):
+        lines.append(f"- Sync warning: pending_backfill={sync.get('pending_backfill')} (run xng sync backfill)")
+    else:
+        lines.append("- Sync health: no pending backfill")
+
+    active = snapshot.get("active_goals", [])
+    if active:
+        lines.append("- Active goals:")
+        for goal in active[:3]:
+            lines.append(f"  - {goal.get('goal_id')}: {goal.get('title')} | status={goal.get('status')} | next={goal.get('next_step')}")
+    else:
+        lines.append("- Active goals: none")
+
+    recent = snapshot.get("recent_checkpoints", [])
+    if recent:
+        lines.append("- Recent checkpoints:")
+        for cp in recent[:3]:
+            lines.append(f"  - {cp.get('goal_id')} / {cp.get('status')} / phase={cp.get('current_phase')} / next={cp.get('next_step')}")
+
+    memory_hits = snapshot.get("recent_memory_hits", [])
+    if memory_hits:
+        lines.append("- Relevant memory hits:")
+        for hit in memory_hits[:3]:
+            lines.append(f"  - [{hit.get('backend')}] {hit.get('title')} @ {hit.get('location')}")
+
+    repo_changes = snapshot.get("recent_repo_changes", [])
+    if repo_changes:
+        lines.append("- Recent repo changes:")
+        for item in repo_changes[:3]:
+            lines.append(f"  - {item.get('commit')}: {item.get('title')}")
+
+    lines.append("")
+    lines.append(f"Suggested next focus: {snapshot.get('suggested_next_focus')}")
+    return "\n".join(lines).strip() + "\n"
+
+
 def main() -> int:
+    ap = argparse.ArgumentParser(description="Build a startup recovery snapshot")
+    ap.add_argument("--format", choices=["json", "bootstrap"], default="json")
+    ap.add_argument("--out", help="write output to a file instead of stdout")
+    args = ap.parse_args()
+
     snapshot = build_rehydrate_snapshot()
-    print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+    rendered = json.dumps(snapshot, ensure_ascii=False, indent=2) if args.format == "json" else render_bootstrap_text(snapshot)
+    if args.out:
+        Path(args.out).write_text(rendered + ("" if rendered.endswith("\n") else "\n"), encoding="utf-8")
+    else:
+        print(rendered)
     return 0
 
 
