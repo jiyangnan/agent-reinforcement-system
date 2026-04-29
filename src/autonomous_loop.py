@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from unified_memory_recall import recall as memory_recall
+from episode_ingest import ingest_event
 
 VALID_STATUSES = {"initialized", "active", "waiting_human", "blocked", "done", "aborted"}
 VALID_STEPS = ["observe", "orient", "decide", "act", "verify", "record"]
@@ -82,18 +83,24 @@ class AutonomousLoopError(RuntimeError):
 
 
 class HAMemoryAdapter:
-    def __init__(self, top_k: int = 5, log_path: str | None = None):
+    def __init__(self, top_k: int = 5, log_path: str | None = None, channel: str = "runtime"):
         self.top_k = top_k
         self.log_path = Path(log_path or os.getenv("ARS_LOOP_MEMORY_LOG", "./runtime/loop_memory.jsonl"))
+        self.channel = channel
 
     def recall(self, query: str) -> list[dict[str, Any]]:
         hits = memory_recall(query, self.top_k)
         return [asdict(h) for h in hits]
 
-    def record(self, item: dict[str, Any]) -> None:
+    def record(self, item: dict[str, Any]) -> dict[str, Any]:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        session_id = f"loop:{item['loop_id']}:{item['iteration']}"
+        summary = f"Loop {item['goal_id']} iteration {item['iteration']}"
+        full_text = json.dumps(item, ensure_ascii=False)
+        ingest = ingest_event(session_id=session_id, summary=summary, full_text=full_text, channel=self.channel)
+        return ingest
 
 
 class FirstPrinciplesEngine:
@@ -211,8 +218,8 @@ class IntegratedPolicy:
             "reason": verification.get("reason", ""),
             "hypotheses": state.working_hypotheses,
         }
-        self.memory.record(item)
-        return {"memory_items": [item]}
+        ingest = self.memory.record(item)
+        return {"memory_items": [item], "ingest": ingest}
 
 
 class AutonomousLoop:

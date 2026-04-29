@@ -93,6 +93,16 @@ agent-reinforcement-system/
 - Product name: **xiaonangua CLI**
 - Command: **`xng`**
 
+### Install
+```bash
+pip install -e .
+```
+
+After install:
+```bash
+xng doctor
+```
+
 
 ### 1. Start Neo4j
 ```bash

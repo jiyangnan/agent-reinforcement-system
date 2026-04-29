@@ -348,6 +348,33 @@ def extract_meta(messages):
     }
 
 
+def ingest_event(session_id, summary, full_text, channel="runtime", first_ts=None, last_ts=None, msg_count=1):
+    """Ingest a synthetic event/memory item into both SQLite and Neo4j."""
+    first_ts = first_ts or datetime.now(timezone.utc).isoformat()
+    last_ts = last_ts or first_ts
+    cleaned_summary = _clean_text(summary)
+    cleaned_full_text = _clean_text(full_text)
+    combined = cleaned_full_text.lower()
+    topics = []
+    for kw, topic in TOPIC_KEYWORDS.items():
+        if kw in combined and topic not in topics:
+            topics.append(topic)
+    entities = extract_entities([{"role": "assistant", "text": cleaned_full_text, "timestamp": first_ts}], cleaned_full_text)
+    sqlite_ok = sqlite_write(session_id, cleaned_summary, cleaned_full_text, channel, topics, first_ts, last_ts, msg_count)
+    neo4j_ok = neo4j_write(session_id, cleaned_summary, cleaned_full_text, channel, topics, entities, first_ts, last_ts, msg_count)
+    return {
+        "summary": cleaned_summary,
+        "topics": topics,
+        "entities": entities,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "msg_count": msg_count,
+        "full_text": cleaned_full_text,
+        "sqlite_ok": sqlite_ok,
+        "neo4j_ok": neo4j_ok,
+    }
+
+
 def ingest_session(session_id, fpath, channel="discord"):
     """Ingest a session file to both Neo4j and SQLite with graceful degradation."""
     messages, ended = parse_messages(fpath)

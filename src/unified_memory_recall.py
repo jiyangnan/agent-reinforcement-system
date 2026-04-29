@@ -58,7 +58,13 @@ def tokenize(query: str) -> list[str]:
     words = re.findall(r"[A-Za-z0-9_\-\.]+", query.lower())
     out = []
     seen = set()
-    for t in zh_phrases + words:
+    candidates = []
+    for w in words:
+        candidates.append(w)
+        for part in re.split(r'[_\-\.]', w):
+            if part and part != w:
+                candidates.append(part)
+    for t in zh_phrases + candidates:
         t = t.strip()
         if len(t) >= 2 and t not in seen:
             seen.add(t)
