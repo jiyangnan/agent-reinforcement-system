@@ -36,6 +36,11 @@ Builds the execution reinforcement layer:
 
 This is what turns the agent from a smart responder into a bounded autonomous worker.
 
+Integrated runtime behavior:
+- **Observe** calls HA memory recall
+- **Orient / Decide** use first-principles reasoning rules
+- **Record** writes loop memory events to a runtime log
+
 Core runtime artifacts:
 - `docs/module-3-autonomous-loop.md`
 - `schemas/goal_frame.schema.json`
@@ -121,6 +126,11 @@ python3 src/unified_memory_recall.py "Hybrid-Vector-Graph neo4j ollama"
 ```bash
 python3 src/autonomous_loop.py examples/goal_frame.example.json --mode run
 ```
+
+This demo now exercises the integrated stack:
+- recalls prior memory through `unified_memory_recall.py`
+- uses first-principles-oriented reasoning for action selection
+- writes loop events to `./runtime/loop_memory.jsonl`
 
 ---
 

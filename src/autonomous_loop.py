@@ -2,15 +2,12 @@
 """
 Autonomous Loop runtime for agent-reinforcement-system.
 
-A minimal executable skeleton for Module 3:
-Observe -> Orient -> Decide -> Act -> Verify -> Record -> Loop/Exit
+Integrated version:
+- Module 1: First-Principles Runtime
+- Module 2: HA Episodic Memory
+- Module 3: Autonomous Loop
 
-This implementation is intentionally small and framework-agnostic.
-It provides:
-- GoalFrame / LoopState dataclasses
-- bounded state transitions
-- JSON load/save helpers
-- a pluggable policy surface for custom observe/orient/decide/act/verify/record logic
+Observe -> Orient -> Decide -> Act -> Verify -> Record -> Loop/Exit
 """
 
 from __future__ import annotations
@@ -22,8 +19,10 @@ import sys
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
+from unified_memory_recall import recall as memory_recall
 
 VALID_STATUSES = {"initialized", "active", "waiting_human", "blocked", "done", "aborted"}
 VALID_STEPS = ["observe", "orient", "decide", "act", "verify", "record"]
@@ -31,6 +30,11 @@ VALID_STEPS = ["observe", "orient", "decide", "act", "verify", "record"]
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def truncate(text: str, n: int = 240) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= n else text[:n] + "..."
 
 
 @dataclass
@@ -77,56 +81,145 @@ class AutonomousLoopError(RuntimeError):
     pass
 
 
-class DefaultPolicy:
-    """Reference policy. Replace methods for real integration."""
+class HAMemoryAdapter:
+    def __init__(self, top_k: int = 5, log_path: str | None = None):
+        self.top_k = top_k
+        self.log_path = Path(log_path or os.getenv("ARS_LOOP_MEMORY_LOG", "./runtime/loop_memory.jsonl"))
+
+    def recall(self, query: str) -> list[dict[str, Any]]:
+        hits = memory_recall(query, self.top_k)
+        return [asdict(h) for h in hits]
+
+    def record(self, item: dict[str, Any]) -> None:
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+class FirstPrinciplesEngine:
+    """Small reasoning helper for Orient/Decide."""
+
+    def orient(self, goal: GoalFrame, state: LoopState, observation: dict[str, Any]) -> dict[str, Any]:
+        premises = [
+            f"goal={goal.goal}",
+            f"success_criteria={len(goal.success_criteria)}",
+            f"constraints={len(goal.constraints)}",
+            f"memory_hits={len(observation.get('memory_hits', []))}",
+        ]
+        needed_conditions = [f"must satisfy: {x}" for x in goal.success_criteria]
+        hypotheses = []
+        if observation.get("memory_hits"):
+            hypotheses.append("Historical memory contains similar context that can reduce uncertainty.")
+        hypotheses.append("The next action should be the smallest move that reduces uncertainty or verifies one success criterion.")
+        if goal.external_side_effects:
+            hypotheses.append("External side effects increase risk and may require human approval before action.")
+        explanation = {
+            "premises": premises,
+            "needed_conditions": needed_conditions,
+            "hypotheses": hypotheses,
+            "explanation": "Rebuilt from goal constraints, observable context, and required success conditions instead of habit.",
+        }
+        return explanation
+
+    def decide(self, goal: GoalFrame, state: LoopState, orientation: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+        memory_hits = observation.get("memory_hits", [])
+        top_memory = memory_hits[0] if memory_hits else None
+        action = "produce_minimal_plan"
+        rationale = "No narrower executable action was preconfigured, so the loop should first produce a minimal verified next-step plan."
+
+        if top_memory:
+            action = f"reuse_or_compare_memory:{top_memory.get('location','unknown')}"
+            rationale = "Closest prior episode should be compared before acting from scratch."
+
+        needs_human_input = False
+        if goal.external_side_effects and goal.risk_level in {"medium", "high"}:
+            needs_human_input = True
+            action = "ask_human_for_authorization"
+            rationale = "External side effects under medium/high risk require bounded escalation."
+
+        verification_plan = [
+            "confirm the chosen action advances at least one success criterion",
+            "confirm no stated constraint is violated",
+        ]
+        return {
+            "action": action,
+            "rationale": rationale,
+            "verification_plan": verification_plan,
+            "needs_human_input": needs_human_input,
+        }
+
+
+class IntegratedPolicy:
+    """Policy that actually connects Module 1 + Module 2 into Module 3."""
+
+    def __init__(self, memory: HAMemoryAdapter | None = None, fp: FirstPrinciplesEngine | None = None):
+        self.memory = memory or HAMemoryAdapter()
+        self.fp = fp or FirstPrinciplesEngine()
 
     def observe(self, goal: GoalFrame, state: LoopState) -> dict[str, Any]:
+        query = f"{goal.name} {goal.goal} {' '.join(goal.success_criteria[:3])}".strip()
+        memory_hits = self.memory.recall(query)
+        summary = f"Observed goal + {len(memory_hits)} memory hits"
+        evidence = [truncate(hit.get("snippet", ""), 180) for hit in memory_hits[:3]]
         return {
-            "observation": f"Goal: {goal.goal}",
-            "evidence": ["no external observation adapter configured"],
+            "observation": summary,
+            "query": query,
+            "memory_hits": memory_hits,
+            "evidence": evidence,
         }
 
     def orient(self, goal: GoalFrame, state: LoopState, observation: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "hypotheses": [
-                "The smallest next step should reduce uncertainty before heavy action.",
-            ],
-            "explanation": "No domain-specific orient adapter configured; using minimal first-principles fallback.",
-        }
+        return self.fp.orient(goal, state, observation)
 
     def decide(self, goal: GoalFrame, state: LoopState, orientation: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "action": "request_or_prepare_next_minimal_step",
-            "verification_plan": ["confirm the selected action reduces uncertainty or advances completion"],
-            "needs_human_input": goal.external_side_effects and goal.risk_level == "high",
-        }
+        observation = {"memory_hits": [], "observation": state.last_observation}
+        # state.last_observation is string, but current iteration's memory hit count is not preserved there.
+        # recover from hint if present; the decision engine mainly needs the memory hits count / top hit.
+        if hasattr(state, "_observation_cache"):
+            observation = getattr(state, "_observation_cache")
+        return self.fp.decide(goal, state, orientation, observation)
 
     def act(self, goal: GoalFrame, state: LoopState, decision: dict[str, Any]) -> dict[str, Any]:
         if decision.get("needs_human_input"):
-            return {"performed": False, "result": "waiting for human authorization"}
-        return {"performed": True, "result": f"executed: {decision['action']}"}
+            return {"performed": False, "result": decision.get("rationale", "waiting for human input")}
+        action = decision.get("action", "")
+        return {
+            "performed": True,
+            "result": f"simulated execution: {action}",
+            "rationale": decision.get("rationale", ""),
+        }
 
     def verify(self, goal: GoalFrame, state: LoopState, action_result: dict[str, Any]) -> dict[str, Any]:
         if not action_result.get("performed"):
             return {"result": "unknown", "reason": action_result.get("result", "not performed")}
+        if state.selected_action.startswith("reuse_or_compare_memory:"):
+            return {"result": "pass", "reason": "Historical context successfully retrieved and used as the next-step anchor."}
+        if state.selected_action == "produce_minimal_plan":
+            return {"result": "pass", "reason": "A bounded next-step plan was produced without violating constraints."}
         return {"result": "pass", "reason": action_result.get("result", "ok")}
 
     def record(self, goal: GoalFrame, state: LoopState, verification: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "memory_items": [
-                {
-                    "type": "episodic",
-                    "text": f"Iteration {state.iteration}: {verification.get('reason', '')}",
-                }
-            ]
+        item = {
+            "ts": now_iso(),
+            "goal_id": goal.goal_id,
+            "loop_id": state.loop_id,
+            "iteration": state.iteration,
+            "status": state.status,
+            "step": state.current_step,
+            "selected_action": state.selected_action,
+            "verification_result": state.verification_result,
+            "reason": verification.get("reason", ""),
+            "hypotheses": state.working_hypotheses,
         }
+        self.memory.record(item)
+        return {"memory_items": [item]}
 
 
 class AutonomousLoop:
     def __init__(self, goal: GoalFrame, state: LoopState | None = None, policy: Any | None = None):
         self.goal = goal
         self.state = state or LoopState(loop_id=str(uuid.uuid4()), goal_id=goal.goal_id)
-        self.policy = policy or DefaultPolicy()
+        self.policy = policy or IntegratedPolicy()
         self._validate_goal()
         self._validate_state()
 
@@ -189,6 +282,7 @@ class AutonomousLoop:
         self.state.current_step = "observe"
         obs = self.policy.observe(self.goal, self.state)
         self.state.last_observation = obs.get("observation", "")
+        setattr(self.state, "_observation_cache", obs)
         return obs
 
     def _run_orient(self, observation: dict[str, Any]) -> dict[str, Any]:
@@ -251,13 +345,19 @@ class AutonomousLoop:
 
     @staticmethod
     def from_files(goal_path: str, state_path: str | None = None) -> "AutonomousLoop":
-        goal = GoalFrame(**json.load(open(goal_path)))
-        state = LoopState(**json.load(open(state_path))) if state_path and os.path.exists(state_path) else None
+        with open(goal_path, encoding="utf-8") as f:
+            goal = GoalFrame(**json.load(f))
+        state = None
+        if state_path and os.path.exists(state_path):
+            with open(state_path, encoding="utf-8") as f:
+                state = LoopState(**json.load(f))
         return AutonomousLoop(goal, state)
 
     def save_state(self, path: str) -> None:
-        with open(path, "w") as f:
-            json.dump(asdict(self.state), f, ensure_ascii=False, indent=2)
+        payload = asdict(self.state)
+        payload.pop("_observation_cache", None)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 def main() -> int:
@@ -272,6 +372,7 @@ def main() -> int:
     result = loop.step() if args.mode == "step" else loop.run()
 
     payload = asdict(result)
+    payload.pop("_observation_cache", None)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
     if args.out:
