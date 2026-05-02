@@ -30,17 +30,16 @@ ENTITY_TYPE_WEIGHT = {
     'command': 0.1,
 }
 
-WORKSPACE = os.getenv("ARS_WORKSPACE", os.getcwd())
-SQLITE_DB = os.getenv("ARS_MEMORY_DB", os.path.expanduser("~/.openclaw/memory/main.sqlite"))
-SESSION_BASE = os.getenv("ARS_SESSION_BASE", os.path.expanduser("~/.openclaw/agents"))
+WORKSPACE = "/Users/ferdinandji/.openclaw/workspace"
+SQLITE_DB = "/Users/ferdinandji/.openclaw/memory/main.sqlite"
 SESSION_DIRS = [
-    os.path.join(SESSION_BASE, "main/sessions"),
-    os.path.join(SESSION_BASE, "growth/sessions"),
-    os.path.join(SESSION_BASE, "invest/sessions"),
+    "/Users/ferdinandji/.openclaw/agents/main/sessions",
+    "/Users/ferdinandji/.openclaw/agents/growth/sessions",
+    "/Users/ferdinandji/.openclaw/agents/invest/sessions",
 ]
-NEO4J_URI = os.getenv("ARS_NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("ARS_NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("ARS_NEO4J_PASSWORD", "password")
+NEO4J_URI = "bolt://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "password"
 
 
 @dataclass
@@ -54,21 +53,33 @@ class Hit:
 
 
 def tokenize(query: str) -> list[str]:
-    zh_phrases = [query.strip()] if any('\u4e00' <= ch <= '\u9fff' for ch in query) else []
-    words = re.findall(r"[A-Za-z0-9_\-\.]+", query.lower())
+    """Tokenize query into searchable tokens.
+    English: split on word boundaries.
+    Chinese: produce the full phrase + bigram (2-char) sliding windows for broader matching."""
     out = []
     seen = set()
-    candidates = []
-    for w in words:
-        candidates.append(w)
-        for part in re.split(r'[_\-\.]', w):
-            if part and part != w:
-                candidates.append(part)
-    for t in zh_phrases + candidates:
-        t = t.strip()
-        if len(t) >= 2 and t not in seen:
-            seen.add(t)
-            out.append(t)
+
+    # English tokens
+    for w in re.findall(r"[A-Za-z0-9_\-\.]+", query.lower()):
+        if len(w) >= 2 and w not in seen:
+            seen.add(w)
+            out.append(w)
+
+    # Chinese: extract continuous Chinese runs
+    zh_runs = re.findall(r'[\u4e00-\u9fff]+', query)
+    for run in zh_runs:
+        # Add the full run as one token
+        if len(run) >= 2 and run not in seen:
+            seen.add(run)
+            out.append(run)
+        # Add bigrams for runs longer than 2 chars (broader matching)
+        if len(run) > 2:
+            for i in range(len(run) - 1):
+                bg = run[i:i+2]
+                if bg not in seen:
+                    seen.add(bg)
+                    out.append(bg)
+
     return out or [query.strip()]
 
 
@@ -184,27 +195,20 @@ def recall_neo4j(query: str, top_k: int) -> list[Hit]:
     """
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     hits: list[Hit] = []
-    try:
-        with driver.session() as s:
-            for r in s.run(cypher, **params, limit=top_k):
-                text = (r["full_text"] or "")
-                entities = [x for x in (r["entity_rows"] or []) if x and x.get('name')]
-                score = 2.0 + score_text_match(query, tokens, r["summary"] or "", text, r["topics"] or [], entities) + recency_boost(r["ts"]) + source_adjustment(f"episode:{r['sid']}", r["summary"] or r["sid"])
-                hits.append(Hit(
-                    backend="neo4j",
-                    score=score,
-                    title=r["summary"] or r["sid"],
-                    location=f"episode:{r['sid']}",
-                    snippet=extract_snippet(text or (r["summary"] or ""), tokens),
-                    meta={"topics": r["topics"] or [], "entities": entities, "ts": r["ts"], "channel": r["channel"], "message_count": r["cnt"]},
-                ))
-    except Exception:
-        return []
-    finally:
-        try:
-            driver.close()
-        except Exception:
-            pass
+    with driver.session() as s:
+        for r in s.run(cypher, **params, limit=top_k):
+            text = (r["full_text"] or "")
+            entities = [x for x in (r["entity_rows"] or []) if x and x.get('name')]
+            score = 2.0 + score_text_match(query, tokens, r["summary"] or "", text, r["topics"] or [], entities) + recency_boost(r["ts"]) + source_adjustment(f"episode:{r['sid']}", r["summary"] or r["sid"])
+            hits.append(Hit(
+                backend="neo4j",
+                score=score,
+                title=r["summary"] or r["sid"],
+                location=f"episode:{r['sid']}",
+                snippet=extract_snippet(text or (r["summary"] or ""), tokens),
+                meta={"topics": r["topics"] or [], "entities": entities, "ts": r["ts"], "channel": r["channel"], "message_count": r["cnt"]},
+            ))
+    driver.close()
     return hits
 
 
@@ -260,6 +264,7 @@ def recall_files(query: str, top_k: int) -> list[Hit]:
         "rg", "-n", "-i", "--no-heading", "--max-count", str(top_k),
         "-g", "*.md",
         "-g", "*.jsonl",
+        "-g", "!*.checkpoint.*.jsonl",
         "-g", "!*.trajectory.jsonl",
         "-g", "!*.trajectory-path.json",
         *patterns,
@@ -287,12 +292,16 @@ def recall_files(query: str, top_k: int) -> list[Hit]:
     return hits
 
 
+def canonical_episode_id(value: str) -> str:
+    return re.sub(r'\.checkpoint\.[A-Za-z0-9\-]+$', '', value)
+
+
 def canonical_key(hit: Hit) -> str:
     if hit.location.startswith('episode:'):
-        return hit.location
+        return 'episode:' + canonical_episode_id(hit.location[len('episode:'):])
     m = re.search(r'episode:([A-Za-z0-9\-\.]+)', hit.snippet)
     if m:
-        return 'episode:' + m.group(1)
+        return 'episode:' + canonical_episode_id(m.group(1))
     return hit.location
 
 
