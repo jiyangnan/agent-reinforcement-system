@@ -38,13 +38,10 @@ TOPIC_KEYWORDS = {
 }
 
 KNOWN_ENTITIES = {
-    "白羊武士": ("白羊武士", "person"),
-    "Aries Warrior": ("白羊武士", "person"),
-    "ferdinand6205": ("白羊武士", "person"),
-    "小南瓜": ("小南瓜", "agent"),
-    "小瓜": ("小南瓜", "agent"),
-    "Samantha": ("Samantha", "person"),
-    "盖伦": ("盖伦", "person"),
+    # --- 用户个性化实体，请根据实际情况修改 ---
+    # "你的名字": ("你的名字", "person"),
+    # "你的英文名": ("你的名字", "person"),
+    # "你的用户名": ("你的名字", "person"),
     "Neo4j": ("Neo4j", "technology"),
     "OpenClaw": ("OpenClaw", "technology"),
     "BotLearn": ("BotLearn", "product"),
@@ -57,8 +54,6 @@ KNOWN_ENTITIES = {
     "Telegram": ("Telegram", "channel"),
     "Discord": ("Discord", "channel"),
     "Feishu": ("Feishu", "channel"),
-    "First-Principles-Only": ("First-Principles-Only", "concept"),
-    "Hybrid-Vector-Graph": ("Hybrid-Vector-Graph", "concept"),
 }
 
 ENTITY_STOPWORDS = {
@@ -217,19 +212,13 @@ def parse_messages(fpath):
             except:
                 pass
     # Skip cron-initiated sessions (detected by first user message pattern)
-    CRON_PATTERNS = [
-        re.compile(r'^\[cron:'),
-        re.compile(r'^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} GMT[+\-]\d+\]'),
-        re.compile(r'^Read HEARTBEAT\.md'),
-        re.compile(r'^Write a dream diary entry'),
-        re.compile(r'^Continue where you left off'),
-        re.compile(r'^System: \[\d{4}-\d{2}-\d{2}'),
-        re.compile(r'^\[Subagent Context\]'),
-    ]
+    # Relaxed: only skip if first user message is a heartbeat or empty
     first_user = next((e for e in entries if e["role"] == "user"), None)
     if first_user:
-        txt = first_user["text"]
-        if any(p.search(txt) for p in CRON_PATTERNS):
+        txt = first_user["text"][:50]
+        if txt.startswith('[OpenClaw heartbeat poll]'):
+            return [], ended_by_phrase
+        if txt.startswith('HEARTBEAT_OK') or txt.startswith('NO_REPLY'):
             return [], ended_by_phrase
     return entries, ended_by_phrase
 
@@ -577,9 +566,117 @@ if __name__ == "__main__":
             print(f"✅ {result['summary'][:80]} | sqlite={result['sqlite_ok']} neo4j={result['neo4j_ok']}")
         else:
             print("Nothing to ingest.")
+    elif cmd == "batch":
+        """D1: Batch ingest sessions with --since filter and checksum dedup.
+        Usage: episode_ingest.py batch [--since YYYY-MM-DD] [--agent main|growth|invest|all] [--batch-size 100] [--dry-run]
+        """
+        import hashlib as _hl
+        since_str = None
+        agent_filter = "all"
+        batch_size = 100
+        dry_run = False
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == '--since' and i + 1 < len(sys.argv):
+                since_str = sys.argv[i + 1]; i += 2
+            elif sys.argv[i] == '--agent' and i + 1 < len(sys.argv):
+                agent_filter = sys.argv[i + 1]; i += 2
+            elif sys.argv[i] == '--batch-size' and i + 1 < len(sys.argv):
+                batch_size = int(sys.argv[i + 1]); i += 2
+            elif sys.argv[i] == '--dry-run':
+                dry_run = True; i += 1
+            else:
+                i += 1
+        since_ts = None
+        if since_str:
+            try:
+                since_ts = datetime.strptime(since_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                print(f"Invalid --since date: {since_str}"); sys.exit(1)
+        # Load checksum ledger
+        ledger_path = os.path.join(os.path.dirname(__file__), ".backfill_ledger.json")
+        ledger = {}
+        if os.path.exists(ledger_path):
+            try:
+                with open(ledger_path) as f:
+                    ledger = json.load(f)
+            except Exception:
+                pass
+        agents = ["main", "growth", "invest"] if agent_filter == "all" else [agent_filter]
+        total_processed = 0
+        total_ingested = 0
+        total_skipped_checksum = 0
+        total_skipped_empty = 0
+        total_skipped_date = 0
+        total_neo4j_ok = 0
+        total_neo4j_fail = 0
+        for agent in agents:
+            sessions_dir = os.path.join(SESSION_BASE, agent, "sessions")
+            if not os.path.exists(sessions_dir):
+                continue
+            files = sorted(
+                [(f, os.path.getmtime(os.path.join(sessions_dir, f))) for f in os.listdir(sessions_dir) if f.endswith(".jsonl")],
+                key=lambda x: x[1], reverse=True  # newest first
+            )
+            for fname, _ in files:
+                if total_processed >= batch_size:
+                    break
+                fpath = os.path.join(sessions_dir, fname)
+                session_id = fname.replace(".jsonl", "")
+                total_processed += 1
+                # Checksum dedup
+                try:
+                    with open(fpath, 'rb') as f:
+                        chk = _hl.md5(f.read()).hexdigest()
+                except Exception:
+                    continue
+                if session_id in ledger and ledger[session_id] == chk:
+                    total_skipped_checksum += 1
+                    continue
+                # Date filter
+                if since_ts:
+                    mtime = os.path.getmtime(fpath)
+                    if mtime < since_ts:
+                        total_skipped_date += 1
+                        continue
+                # Parse
+                messages, _ = parse_messages(fpath)
+                if not messages:
+                    total_skipped_empty += 1
+                    continue
+                if dry_run:
+                    print(f"[DRY] {session_id[:24]}... | msgs={len(messages)}")
+                    total_ingested += 1
+                    continue
+                channel = _detect_channel(session_id, agent)
+                result = ingest_session(session_id, fpath, channel)
+                if result:
+                    total_ingested += 1
+                    if result["neo4j_ok"]:
+                        total_neo4j_ok += 1
+                    else:
+                        total_neo4j_fail += 1
+                    # Update checksum ledger
+                    ledger[session_id] = chk
+                    if total_ingested % 20 == 0:
+                        # Periodic ledger save
+                        with open(ledger_path, 'w') as f:
+                            json.dump(ledger, f)
+                        print(f"  [Progress] ingested={total_ingested} neo4j_ok={total_neo4j_ok} fail={total_neo4j_fail}")
+                else:
+                    total_skipped_empty += 1
+        # Final ledger save
+        with open(ledger_path, 'w') as f:
+            json.dump(ledger, f)
+        print(f"\n=== Batch Complete ===")
+        print(f"Processed: {total_processed}  Ingested: {total_ingested}")
+        print(f"Skipped: checksum={total_skipped_checksum} empty={total_skipped_empty} date={total_skipped_date}")
+        print(f"Neo4j: ok={total_neo4j_ok} fail={total_neo4j_fail}")
+        print(f"Ledger saved: {len(ledger)} entries")
     else:
         print("Usage:")
-        print("  episode_ingest.py idle [idle_minutes] [current_session_id]  # scan and ingest idle sessions")
-        print("  episode_ingest.py ending <key>  # trigger on ending phrase")
+        print("  episode_ingest.py idle [idle_minutes] [current_session_id]")
+        print("  episode_ingest.py ending <key>")
         print("  episode_ingest.py ingest <session_id> [channel]")
         print("  episode_ingest.py ingest-file <file_path> [channel]")
+        print("  episode_ingest.py batch [--since YYYY-MM-DD] [--agent main|all] [--batch-size 100] [--dry-run]")

@@ -30,16 +30,28 @@ ENTITY_TYPE_WEIGHT = {
     'command': 0.1,
 }
 
-WORKSPACE = "/Users/ferdinandji/.openclaw/workspace"
-SQLITE_DB = "/Users/ferdinandji/.openclaw/memory/main.sqlite"
+# ── C1: Ripgrep Enhancement Config ──────────────────────────────────────────
+SNIPPET_SPAN = 200          # chars around keyword for snippet generation
+FRONTMATTER_FIELDS = {'title', 'tags', 'created', 'date'}  # extractable frontmatter
+HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)', re.MULTILINE)  # ## headings as semantic boundaries
+
+# ── C2: Unified Ranking Weights ────────────────────────────────────────────
+BACKEND_WEIGHTS = {
+    'neo4j': 1.0,
+    'sqlite_fts': 0.6,
+    'ripgrep': 0.3,
+}
+
+WORKSPACE = os.getenv("ARS_WORKSPACE", os.path.expanduser("~/.openclaw/workspace"))
+SQLITE_DB = os.getenv("ARS_MEMORY_DB", os.path.expanduser("~/.openclaw/memory/main.sqlite"))
+_OPENCLAW_BASE = os.getenv("OPENCLAW_HOME", os.path.expanduser("~/.openclaw"))
 SESSION_DIRS = [
-    "/Users/ferdinandji/.openclaw/agents/main/sessions",
-    "/Users/ferdinandji/.openclaw/agents/growth/sessions",
-    "/Users/ferdinandji/.openclaw/agents/invest/sessions",
+    os.path.join(_OPENCLAW_BASE, "agents", agent, "sessions")
+    for agent in ["main", "growth", "invest"]
 ]
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "password"
+NEO4J_URI = os.getenv("ARS_NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("ARS_NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("ARS_NEO4J_PASSWORD", "password")
 
 
 @dataclass
@@ -212,6 +224,133 @@ def recall_neo4j(query: str, top_k: int) -> list[Hit]:
     return hits
 
 
+def recall_neo4j_concepts(query: str, top_k: int) -> list[Hit]:
+    """D4: Recall Concept nodes from Neo4j."""
+    try:
+        from neo4j import GraphDatabase
+    except Exception:
+        return []
+    tokens = tokenize(query)
+    clauses = []
+    params = {}
+    for i, tok in enumerate(tokens):
+        params[f"t{i}"] = tok.lower()
+        clauses.append(f"toLower(c.title) CONTAINS $t{i}")
+        clauses.append(f"toLower(c.description) CONTAINS $t{i}")
+        clauses.append(f"ANY(x IN coalesce(c.tags, []) WHERE toLower(x) CONTAINS $t{i})")
+    if not clauses:
+        return []
+    cypher = f"""
+    MATCH (c:Concept)
+    WHERE {' OR '.join(clauses)}
+    RETURN c.title AS title, c.description AS desc, c.source_path AS spath, c.tags AS tags
+    LIMIT $limit
+    """
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    hits = []
+    with driver.session() as s:
+        for r in s.run(cypher, **params, limit=top_k):
+            desc = r["desc"] or ""
+            score = 1.8 + score_text_match(query, tokens, r["title"] or "", desc)
+            hits.append(Hit(
+                backend="neo4j",
+                score=score,
+                title=f"📘 {r['title']}",
+                location=r["spath"] or f"concept:{r['title']}",
+                snippet=extract_snippet(desc, tokens),
+                meta={"node_type": "Concept", "tags": r["tags"] or []},
+            ))
+    driver.close()
+    return hits
+
+
+def recall_neo4j_rules(query: str, top_k: int) -> list[Hit]:
+    """D4: Recall Rule nodes from Neo4j."""
+    try:
+        from neo4j import GraphDatabase
+    except Exception:
+        return []
+    tokens = tokenize(query)
+    clauses = []
+    params = {}
+    for i, tok in enumerate(tokens):
+        params[f"t{i}"] = tok.lower()
+        clauses.append(f"toLower(r.title) CONTAINS $t{i}")
+        clauses.append(f"toLower(r.description) CONTAINS $t{i}")
+        clauses.append(f"ANY(x IN coalesce(r.triggered_by, []) WHERE toLower(x) CONTAINS $t{i})")
+    if not clauses:
+        return []
+    cypher = f"""
+    MATCH (r:Rule)
+    WHERE {' OR '.join(clauses)}
+    RETURN r.title AS title, r.description AS desc, r.severity AS severity,
+           r.triggered_by AS triggers, r.source_path AS spath
+    LIMIT $limit
+    """
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    hits = []
+    with driver.session() as s:
+        for r in s.run(cypher, **params, limit=top_k):
+            desc = r["desc"] or ""
+            severity = r["severity"] or "warning"
+            score = 2.5 if severity == "critical" else 1.5
+            score += score_text_match(query, tokens, r["title"] or "", desc)
+            hits.append(Hit(
+                backend="neo4j",
+                score=score,
+                title=f"🚨 {r['title']}",
+                location=r["spath"] or f"rule:{r['title']}",
+                snippet=extract_snippet(desc, tokens),
+                meta={"node_type": "Rule", "severity": severity, "triggered_by": r["triggers"] or []},
+            ))
+    driver.close()
+    return hits
+
+
+def recall_journal_episodes(query: str, top_k: int) -> list[Hit]:
+    """D4: Recall Journal Episode nodes from Neo4j."""
+    try:
+        from neo4j import GraphDatabase
+    except Exception:
+        return []
+    tokens = tokenize(query)
+    clauses = []
+    params = {}
+    for i, tok in enumerate(tokens):
+        params[f"t{i}"] = tok.lower()
+        clauses.append(f"toLower(e.summary) CONTAINS $t{i}")
+        clauses.append(f"toLower(e.full_text) CONTAINS $t{i}")
+        clauses.append(f"ANY(x IN coalesce(e.topics, []) WHERE toLower(x) CONTAINS $t{i})")
+        clauses.append(f"ANY(x IN coalesce(e.entity_names, []) WHERE toLower(x) CONTAINS $t{i})")
+    if not clauses:
+        return []
+    cypher = f"""
+    MATCH (e:Episode)
+    WHERE e.channel = 'journal' AND ({' OR '.join(clauses)})
+    RETURN e.session_id AS sid, e.summary AS summary, e.full_text AS full_text,
+           e.topics AS topics, e.journal_date AS jdate, e.section_type AS stype
+    ORDER BY e.journal_date DESC
+    LIMIT $limit
+    """
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    hits = []
+    with driver.session() as s:
+        for r in s.run(cypher, **params, limit=top_k):
+            text = r["full_text"] or ""
+            score = 1.5 + score_text_match(query, tokens, r["summary"] or "", text, r["topics"] or []) + recency_boost(r.get("jdate"))
+            stype = r.get("stype", "general")
+            hits.append(Hit(
+                backend="neo4j",
+                score=score,
+                title=f"📝 [{stype}] {r['summary'] or r['sid']}",
+                location=f"journal:{r['sid']}",
+                snippet=extract_snippet(text, tokens),
+                meta={"node_type": "JournalEpisode", "journal_date": r.get("jdate"), "section_type": stype, "topics": r["topics"] or []},
+            ))
+    driver.close()
+    return hits
+
+
 def recall_sqlite(query: str, top_k: int) -> list[Hit]:
     if not os.path.exists(SQLITE_DB):
         return []
@@ -254,14 +393,70 @@ def recall_sqlite(query: str, top_k: int) -> list[Hit]:
     return hits
 
 
+def _parse_frontmatter(content: str) -> dict:
+    """Extract YAML frontmatter from markdown content (C1 enhancement)."""
+    fm = {}
+    if not content.startswith('---'):
+        return fm
+    end = content.find('---', 3)
+    if end < 0:
+        return fm
+    block = content[3:end].strip()
+    for line in block.splitlines():
+        line = line.strip()
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key in FRONTMATTER_FIELDS:
+            if val.startswith('[') and val.endswith(']'):
+                fm[key] = [v.strip().strip('"').strip("'") for v in val[1:-1].split(',') if v.strip()]
+            else:
+                fm[key] = val
+    return fm
+
+
+def _extract_headings(content: str) -> list[tuple[int, str]]:
+    """Extract markdown headings as semantic boundaries (C1 enhancement).
+    Returns list of (line_number_0indexed, heading_text)."""
+    headings = []
+    for m in HEADING_RE.finditer(content):
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        # approximate line number from position
+        line_no = content[:m.start()].count('\n')
+        headings.append((line_no, title))
+    return headings
+
+
+def _file_context_around_line(lines: list[str], target_idx: int, context: int = 3) -> tuple[str, str]:
+    """Get heading context + snippet around a target line (C1 enhancement).
+    Returns (nearest_heading, snippet_text)."""
+    headings_above = []
+    for i in range(target_idx, -1, -1):
+        if i < len(lines):
+            m = re.match(r'^(#{1,4})\s+(.+)', lines[i])
+            if m:
+                headings_above.append(m.group(2).strip())
+                break
+    nearest = headings_above[0] if headings_above else ''
+    start = max(0, target_idx - context)
+    end = min(len(lines), target_idx + context + 1)
+    snippet = ' '.join(lines[start:end]).strip()
+    return nearest, snippet
+
+
 def recall_files(query: str, top_k: int) -> list[Hit]:
+    """C1-Enhanced Ripgrep recall: frontmatter parsing, heading extraction,
+    200-char snippets, date-weighted recency boost, same-file dedup."""
     tokens = tokenize(query)
     patterns = []
     for t in tokens[:6]:
         patterns.extend(["-e", t])
-    search_paths = [os.path.join(WORKSPACE, "memory"), "/Users/ferdinandji/.openclaw/workspace/MEMORY.md", *SESSION_DIRS]
+    search_paths = [os.path.join(WORKSPACE, "memory"), os.path.join(WORKSPACE, "MEMORY.md"), *SESSION_DIRS]
     cmd = [
-        "rg", "-n", "-i", "--no-heading", "--max-count", str(top_k),
+        "rg", "-n", "-i", "--no-heading", "--max-count", str(top_k * 3),
         "-g", "*.md",
         "-g", "*.jsonl",
         "-g", "!*.checkpoint.*.jsonl",
@@ -274,22 +469,90 @@ def recall_files(query: str, top_k: int) -> list[Hit]:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
     except Exception:
         return []
-    hits = []
-    for line in out.stdout.splitlines()[:top_k]:
+
+    # Group results by file for C1 enhancements
+    file_lines: dict[str, list[tuple[int, str]]] = {}  # path -> [(line_no, text)]
+    for line in out.stdout.splitlines()[:top_k * 3]:
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue
-        path, line_no, text = parts[0], parts[1], parts[2]
-        score = 0.6 + score_text_match(query, tokens, os.path.basename(path), text) + source_adjustment(path, os.path.basename(path))
-        hits.append(Hit(
-            backend="ripgrep",
-            score=score,
-            title=os.path.basename(path),
-            location=f"{path}#{line_no}",
-            snippet=text.strip(),
-            meta={},
-        ))
-    return hits
+        path, line_no_str, text = parts[0], parts[1], parts[2]
+        try:
+            line_no = int(line_no_str)
+        except ValueError:
+            continue
+        file_lines.setdefault(path, []).append((line_no, text))
+
+    hits = []
+    file_frontmatter_cache: dict[str, dict] = {}
+    file_date_cache: dict[str, float] = {}  # path -> recency_boost
+
+    for path, matches in file_lines.items():
+        # Parse frontmatter once per file
+        if path not in file_frontmatter_cache:
+            fm = {}
+            try:
+                with open(path, 'r', errors='ignore') as f:
+                    first_2k = f.read(2048)
+                fm = _parse_frontmatter(first_2k)
+                # Extract date from frontmatter or filename
+                date_str = fm.get('created') or fm.get('date', '')
+                if not date_str:
+                    # Try filename pattern: YYYY-MM-DD
+                    m = re.search(r'(\d{4}-\d{2}-\d{2})', os.path.basename(path))
+                    date_str = m.group(1) if m else ''
+                file_date_cache[path] = recency_boost(date_str) if date_str else 0.0
+            except Exception:
+                pass
+            file_frontmatter_cache[path] = fm
+
+        fm = file_frontmatter_cache.get(path, {})
+        date_boost = file_date_cache.get(path, 0.0)
+        fm_tags = fm.get('tags', [])
+        fm_title = fm.get('title', '')
+
+        # Same-file dedup: keep top-2 matches per file
+        for line_no, text in matches[:2]:
+            base_score = 0.6 + score_text_match(query, tokens, os.path.basename(path), text) + source_adjustment(path, os.path.basename(path))
+
+            # Frontmatter tag match bonus
+            if fm_tags:
+                tag_str = ' '.join(fm_tags).lower()
+                for t in tokens:
+                    if t.lower() in tag_str:
+                        base_score += 0.5
+
+            # Frontmatter title match bonus
+            if fm_title and fm_title.lower() in query.lower():
+                base_score += 0.8
+
+            # Date recency boost
+            base_score += date_boost
+
+            # Generate 200-char snippet around keyword
+            snippet = extract_snippet(text, tokens, span=SNIPPET_SPAN)
+
+            # Build enriched title with heading + date
+            display_title = os.path.basename(path)
+            enriched_meta = {}
+            if fm_title:
+                display_title = fm_title
+                enriched_meta['title'] = fm_title
+            if fm.get('created'):
+                enriched_meta['created'] = fm['created']
+            if fm_tags:
+                enriched_meta['tags'] = fm_tags
+
+            hits.append(Hit(
+                backend="ripgrep",
+                score=base_score,
+                title=display_title,
+                location=f"{path}#{line_no}",
+                snippet=snippet,
+                meta=enriched_meta,
+            ))
+
+    return hits[:top_k]
 
 
 def canonical_episode_id(value: str) -> str:
@@ -306,10 +569,11 @@ def canonical_key(hit: Hit) -> str:
 
 
 def dedupe_and_rank(hits: list[Hit], top_k: int) -> list[Hit]:
+    """C2: Unified ranking with configurable backend weights."""
     best = {}
-    backend_bias = {'neo4j': 0.3, 'sqlite_fts': 0.15, 'ripgrep': 0.0}
     for h in hits:
-        h.score += backend_bias.get(h.backend, 0.0)
+        # Apply C2 backend weights (replaces old hardcoded backend_bias)
+        h.score = h.score * BACKEND_WEIGHTS.get(h.backend, 0.3)
         key = canonical_key(h)
         if key not in best or h.score > best[key].score:
             best[key] = h
@@ -317,10 +581,18 @@ def dedupe_and_rank(hits: list[Hit], top_k: int) -> list[Hit]:
     return ranked[:top_k]
 
 
-def recall(query: str, top_k: int = 8, use_neo4j: bool = True, use_sqlite: bool = True, use_files: bool = True) -> list[Hit]:
+def recall(query: str, top_k: int = 8, use_neo4j: bool = True, use_sqlite: bool = True, use_files: bool = True,
+           use_concepts: bool = True, use_rules: bool = True, use_journal: bool = True) -> list[Hit]:
+    """Unified four-path recall: Episode + Concept + Rule + Journal."""
     hits = []
     if use_neo4j:
         hits.extend(recall_neo4j(query, top_k))
+    if use_concepts:
+        hits.extend(recall_neo4j_concepts(query, top_k))
+    if use_rules:
+        hits.extend(recall_neo4j_rules(query, top_k))
+    if use_journal:
+        hits.extend(recall_journal_episodes(query, top_k))
     if use_sqlite:
         hits.extend(recall_sqlite(query, top_k))
     if use_files and len(hits) < max(3, top_k // 2):
@@ -331,9 +603,12 @@ def recall(query: str, top_k: int = 8, use_neo4j: bool = True, use_sqlite: bool 
 def format_text(query: str, hits: list[Hit]) -> str:
     if not hits:
         return f"No memory hits for: {query}"
+    # Source emoji by backend
+    EMOJI = {'neo4j': '🧠', 'sqlite_fts': '🗃️', 'ripgrep': '📄'}
     lines = [f"Unified Memory Recall · query={query} · hits={len(hits)}\n"]
     for i, h in enumerate(hits, 1):
-        lines.append(f"{i}. [{h.backend}] {h.title}")
+        emoji = EMOJI.get(h.backend, '❓')
+        lines.append(f"{i}. {emoji} [{h.backend}] {h.title}")
         lines.append(f"   at: {h.location}")
         if h.meta:
             lines.append(f"   meta: {json.dumps(h.meta, ensure_ascii=False)}")
@@ -349,6 +624,9 @@ def main():
     ap.add_argument("--no-neo4j", action="store_true")
     ap.add_argument("--no-sqlite", action="store_true")
     ap.add_argument("--no-files", action="store_true")
+    ap.add_argument("--no-concepts", action="store_true")
+    ap.add_argument("--no-rules", action="store_true")
+    ap.add_argument("--no-journal", action="store_true")
     args = ap.parse_args()
     hits = recall(
         args.query,
@@ -356,6 +634,9 @@ def main():
         use_neo4j=not args.no_neo4j,
         use_sqlite=not args.no_sqlite,
         use_files=not args.no_files,
+        use_concepts=not args.no_concepts,
+        use_rules=not args.no_rules,
+        use_journal=not args.no_journal,
     )
     if args.json:
         print(json.dumps([asdict(h) for h in hits], ensure_ascii=False, indent=2))
